@@ -145,29 +145,49 @@ float interpolate_tricubic_fast(sampler3D tex, vec3 coord)
         return mix(tex001, tex000, g0.z);  //weigh along the z-direction
 }
 
+/* central difference */
+vec3 gradient(in sampler3D s, vec3 p, float dt)
+{
+        vec2 e = vec2(dt, 0.0);
+
+        return vec3(interpolate_tricubic_fast(s, p - e.xyy) - interpolate_tricubic_fast(s, p + e.xyy),
+                interpolate_tricubic_fast(s, p - e.yxy) - interpolate_tricubic_fast(s, p + e.yxy),
+                interpolate_tricubic_fast(s, p - e.yyx) - interpolate_tricubic_fast(s, p + e.yyx));
+}
+
 void main(void) {
-	vec3 ray_dir = normalize(vray_dir);
-	vec2 t_hit = intersect_box(transformed_eye, ray_dir);
-	if (t_hit.x > t_hit.y) {
-		discard;
-	}
-	t_hit.x = max(t_hit.x, 0.0);
-	vec3 dt_vec = 1.0 / (vec3(volume_dims) * abs(ray_dir));
-	float dt = dt_scale * min(dt_vec.x, min(dt_vec.y, dt_vec.z));
-	float offset = wang_hash(int(gl_FragCoord.x + 640.0 * gl_FragCoord.y));
-	vec3 p = transformed_eye + (t_hit.x + offset * dt) * ray_dir;
-	for (float t = t_hit.x; t < t_hit.y; t += dt) {
-		float val = interpolate_tricubic_fast(volume, p);
-		vec4 val_color = vec4(texture(colormap, vec2(val, 0.5)).rgb, val);
-		// Opacity correction
-		val_color.a = 1.0 - pow(1.0 - val_color.a, dt_scale);
-		color.rgb += (1.0 - color.a) * val_color.a * val_color.rgb;
-		color.a += (1.0 - color.a) * val_color.a;
-		if (color.a >= 0.95) {
-			break;
-		}
-		p += ray_dir * dt;
-	}
+        vec3 ray_dir = normalize(vray_dir);
+        vec2 t_hit = intersect_box(transformed_eye, ray_dir);
+        if (t_hit.x > t_hit.y) {
+                discard;
+        }
+        t_hit.x = max(t_hit.x, 0.0);
+        vec3 dt_vec = 0.5 / (vec3(volume_dims) * abs(ray_dir));
+        float dt = dt_scale * min(dt_vec.x, min(dt_vec.y, dt_vec.z));
+        vec3 p = transformed_eye + t_hit.x * ray_dir;
+
+        float prev_val = 0.0;
+        for (float t = t_hit.x; t < t_hit.y; t += dt) {
+                float val = interpolate_tricubic_fast(volume, p);
+                vec4 val_color = vec4(0.0,0.0,0.0,0.0); //vec4(texture(colormap, vec2(val, 0.5)).rgb, val);
+                // Opacity correction
+                val_color.a = 1.0 - pow(1.0 - val_color.a, dt_scale);
+                color.rgb += (1.0 - color.a) * val_color.a * val_color.rgb;
+                color.a += (1.0 - color.a) * val_color.a;
+                if (color.a >= 0.95) {
+                        break;
+                }
+
+                if (sign(val - 0.10) != sign(prev_val - 0.10)) {
+                        vec3 prev_p = p - ray_dir * dt;
+                        float a = (0.10 - prev_val)/(val - prev_val);
+                        vec3 inter_p = (1.0 - a)*(p - dt*ray_dir) + a*p;
+                        color = vec4(gradient(volume, inter_p, 0.02), 1.0);
+                }
+
+                prev_val = val;
+                p += ray_dir * dt;
+        }
     color.r = linear_to_srgb(color.r);
     color.g = linear_to_srgb(color.g);
     color.b = linear_to_srgb(color.b);
